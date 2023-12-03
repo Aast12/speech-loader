@@ -9,7 +9,6 @@ class Audio(SQLModel, table=True):
     internet_archive_file_id: str
     file_path: str
     file_size: int
-    processed: bool = Field(default=False)
     duration: int
     rms: float
     dbfs: float

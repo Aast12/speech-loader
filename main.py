@@ -1,90 +1,65 @@
-
-import internetarchive
-from internetarchive import Item
 from query import IASearchQueryBuilder, IACollection
-from datetime import datetime, timedelta
+from datetime import timedelta
 from models import Audio
 import os
-from pydub import AudioSegment
-import pprint
+from crawler import IACrawlerConfig, IACrawler
+from db import SQLModel, engine, Audio
+from sqlmodel import Session, select
+from sqlalchemy import Engine
 
-# Runtime limit for a crawled audio file to be processed
+# Search config/constraints
 RUNTIME_LIMIT = timedelta(minutes=15)
 DOWNLOAD_PATH = "./files"
 SIZE_LIMIT = 10_000_000
+ITEM_LIMIT = 100
 
-search_query = IASearchQueryBuilder()\
-                .set_collection(IACollection.PRESIDENTIAL_RECORDINGS)\
-                .set_language(["English", "eng"])\
-                .set_media_type("audio")
-
-
-def search(search_query: IASearchQueryBuilder):
-    query_str = search_query.build_query()
-
-    print(query_str)
-    results = internetarchive.search_items(query_str, sorts=["downloads desc"])
-
-    limit = 0
-    for item in results.iter_as_items():
-
-        item_files = item.get_files(formats=["MP3", "VBR MP3"])
-        # pprint.pprint(item.metadata)
-        for file in item_files:
-            if file.size > SIZE_LIMIT:
-                continue
-
-            file_path = f"{DOWNLOAD_PATH}/{file.name}"
-
-            if os.path.exists(file_path):
-                print(file_path, "already exists")
-                continue
-
-            item_source_date = None
-            try:
-                item_source_date = datetime.strptime(item.metadata["date"], "%y-%m-%d")
-            except ValueError:
-                pass
-
-            file_meta = {
-                "internet_archive_item_id": item.metadata["identifier"],
-                "internet_archive_file_id": file.identifier,
-                "file_path": file_path,
-                "file_size": int(file.size),
-                "source_date": item_source_date
-            }
-
-            print(file_path, file.size)
-            print(file.source)
-
-            fileobj = open(file_path, "xb")
-            file.download(fileobj=fileobj)
-            fileobj.close()
-
-            audio = AudioSegment.from_file(file_path, format='mp3')
-
-            max_dbfs = audio.max_dBFS
-            bdfs = audio.dBFS
-            rms = audio.rms
-            duration = audio.duration_seconds
-
-            file_metrics = {
-                'max_dbfs': max_dbfs,
-                'dbfs': bdfs,
-                'rms': rms,
-                'duration': duration
-            }
-
-            audio_entry = Audio(**file_meta, **file_metrics)
-
-            pprint.pprint(audio_entry)
-
-            pprint.pprint(file_metrics)
-
-            # file.download(file_path=DOWNLOAD_PATH, ignore_existing=True)
-        limit += 1
-        if limit > 20:
-            break
+search_query = (
+    IASearchQueryBuilder()
+    .set_collection(IACollection.PRESIDENTIAL_RECORDINGS)
+    .set_language(["English", "eng"])
+    .set_media_type("audio")
+)
 
 
-search(search_query)
+def should_download_w_session(session: Session, file_path: str, file_meta: dict) -> bool:
+    if os.path.exists(file_path):
+        return False
+    # with Session(engine) as session:
+    statement = select(Audio)\
+                .where(Audio.internet_archive_file_id == file_meta["internet_archive_item_id"] and \
+                        Audio.internet_archive_file_id == file_meta["internet_archive_item_id"])\
+                .limit(1)
+    
+    results = session.exec(statement)
+    found_item = results.one_or_none()
+    if found_item is not None:
+        return False
+    
+    return True
+
+
+def should_download_wrapped(session: Session) -> bool:
+    def should_download(file_path: str, file_meta: dict) -> bool:
+        return should_download_w_session(session, file_path, file_meta)
+    
+    return should_download
+
+if __name__ == "__main__":
+    SQLModel.metadata.create_all(engine)
+    session = Session(engine)
+
+    crawler_conf = IACrawlerConfig(
+        item_limit=ITEM_LIMIT, size_limit=SIZE_LIMIT, download_path=DOWNLOAD_PATH
+    )
+    crawler = IACrawler(search_query, crawler_conf)
+
+    search_results = crawler.search(should_download_w_session(session))
+    # search_results = crawler.search(should_download)
+
+    for audio_data in search_results:
+        audio_entry = Audio(**audio_data)
+        session.add(audio_entry)
+        print("FOUND", audio_data)
+
+    session.commit()
+    session.close()
