@@ -33,7 +33,9 @@ class IACrawler:
         try:
             item_source_date = datetime.strptime(item.metadata["date"], "%y-%m-%d")
         except ValueError:
-            logging.info(f"Unable to parse source date for item_id={item.metadata["identifier"]}")
+            logging.info(
+                f"Unable to parse source date for item_id={item.metadata['identifier']}"
+            )
             pass
 
         file_meta = {
@@ -73,7 +75,7 @@ class IACrawler:
         results = internetarchive.search_items(
             self.query_string, sorts=["downloads desc"]
         )
-        logging.info("Starting audio search")
+        logging.info(f"Starting audio search for query={self.query_string}")
         for index, item in enumerate(results.iter_as_items()):
             if index > self.bounds.item_limit:
                 break
@@ -86,7 +88,9 @@ class IACrawler:
                 file_path, file_meta = self.__extract_audio_metadata(item, file)
 
                 if not should_download(file_path, file_meta):
-                    logging.info(f"file_id={file_meta["internet_archive_file_id"]} skipped")
+                    logging.info(
+                        f"file_id={file_meta['internet_archive_file_id']} skipped"
+                    )
                     continue
 
                 with open(file_path, "xb") as fileobj:
